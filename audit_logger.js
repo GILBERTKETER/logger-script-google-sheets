@@ -169,14 +169,18 @@ function getOldStructure() {
 }
 
 function getLogSheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var logSheet = ss.getSheetByName("Logs");
+  var logSpreadsheet = SpreadsheetApp.openById("1BanMsUh4wqk_URQE98sAvl0VGvFTZK8P4sluDrNC-90"); 
+  var logSheet = logSpreadsheet.getSheetByName("Logs");
+
+  // If "Logs" sheet doesn’t exist yet, create it
   if (!logSheet) {
-    logSheet = ss.insertSheet("Logs");
+    logSheet = logSpreadsheet.insertSheet("Logs");
     logSheet.appendRow(["Timestamp", "User", "Action Type", "Details"]);
   }
+
   return logSheet;
 }
+
 
 function formatDate(date) {
   return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
