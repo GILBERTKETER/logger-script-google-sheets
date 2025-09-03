@@ -1,36 +1,38 @@
 /******************************
- * GOOGLE SHEETS FULL AUDIT LOGGER (INDUSTRY READY)
- * Standalone version (secure)
- * Tracks:
- * - Cell edits (values + formulas)
- * - Bulk edits (paste, drag, clear ranges)
- * - Structural changes (rows, columns, sheets, renames)
- * Logs with exact row/column/sheet info
+ * GOOGLE SHEETS MULTI-SPREADSHEET AUDIT LOGGER
+ * Tracks edits + structural changes from multiple sheets
+ * Logs into one private spreadsheet, separate tabs per source
  ******************************/
 
-// IDs (replace these with your own)
-var MAIN_SHEET_ID = "PUT-YOUR-MAIN-SHEET-ID-HERE";
-var LOG_SHEET_ID  = "PUT-YOUR-PRIVATE-LOG-SHEET-ID-HERE";
+// Central private log spreadsheet
+var LOG_SHEET_ID = "PUT-YOUR-PRIVATE-LOG-SHEET-ID-HERE";
+
+// Sheets to monitor
+var MONITORED_SHEETS = [
+  { id: "PUT-SHEET-ID-1-HERE", logName: "SheetA_Logs" },
+  { id: "PUT-SHEET-ID-2-HERE", logName: "SheetB_Logs" },
+  { id: "PUT-SHEET-ID-3-HERE", logName: "SheetC_Logs" }
+];
 
 /******************************
  * TRIGGER HANDLERS
  ******************************/
 
-function onMainEdit(e) {
+function onAnyEdit(e) {
   try {
     logEditEvent(e);
-    saveSheetStructure();
+    saveSheetStructure(e.source.getId());
   } catch (err) {
-    console.error("onMainEdit error: " + err);
+    console.error("onAnyEdit error: " + err);
   }
 }
 
-function onMainChange(e) {
+function onAnyChange(e) {
   try {
     logChangeEvent(e);
-    saveSheetStructure();
+    saveSheetStructure(e.source.getId());
   } catch (err) {
-    console.error("onMainChange error: " + err);
+    console.error("onAnyChange error: " + err);
   }
 }
 
@@ -38,9 +40,11 @@ function onMainChange(e) {
  * LOGGING FUNCTIONS
  ******************************/
 
-/** Handle cell edits (values, formulas, ranges) */
 function logEditEvent(e) {
-  var logSheet = getLogSheet();
+  var sourceId = e.source.getId();
+  var logSheet = getLogSheetForSource(sourceId);
+  if (!logSheet) return; // Not a monitored sheet
+
   var user = Session.getActiveUser().getEmail() || "Unknown User";
   var sheetName = e.range.getSheet().getName();
   var timestamp = formatDate(new Date());
@@ -49,7 +53,6 @@ function logEditEvent(e) {
   var numRows = range.getNumRows();
   var numCols = range.getNumColumns();
 
-  // Bulk edit
   if (numRows > 1 || numCols > 1) {
     var firstCell = range.getCell(1, 1);
     var firstFormula = firstCell.getFormula();
@@ -64,7 +67,6 @@ function logEditEvent(e) {
     return;
   }
 
-  // Single cell edit
   var cell = range.getA1Notation();
   var oldValue = e.oldValue !== undefined ? e.oldValue : "(blank)";
   var newValue = range.getFormula() ? "Formula: " + range.getFormula() : range.getValue();
@@ -74,27 +76,29 @@ function logEditEvent(e) {
   logSheet.appendRow([timestamp, user, "EDIT", message]);
 }
 
-/** Handle structural changes */
 function logChangeEvent(e) {
-  var logSheet = getLogSheet();
+  var sourceId = e.source.getId();
+  var logSheet = getLogSheetForSource(sourceId);
+  if (!logSheet) return;
+
   var user = Session.getActiveUser().getEmail() || "Unknown User";
   var timestamp = formatDate(new Date());
   var changeType = e.changeType || "UNKNOWN_CHANGE";
 
-  var oldStruct = getOldStructure();
-  var newStruct = captureCurrentStructure();
+  var oldStruct = getOldStructure(sourceId);
+  var newStruct = captureCurrentStructure(sourceId);
 
   var message;
 
   switch (changeType) {
     case "INSERT_ROW":
     case "REMOVE_ROW":
-      message = detectRowChange(oldStruct, newStruct, user, timestamp, changeType);
+      message = detectRowChange(oldStruct, newStruct, user, timestamp, changeType, sourceId);
       break;
 
     case "INSERT_COLUMN":
     case "REMOVE_COLUMN":
-      message = detectColumnChange(oldStruct, newStruct, user, timestamp, changeType);
+      message = detectColumnChange(oldStruct, newStruct, user, timestamp, changeType, sourceId);
       break;
 
     case "INSERT_GRID":
@@ -108,7 +112,6 @@ function logChangeEvent(e) {
       break;
 
     case "RENAME_SHEET":
-      // Compare names
       var oldNames = Object.keys(oldStruct);
       var newNames = Object.keys(newStruct);
       var renamedFrom = oldNames.find(n => !newNames.includes(n));
@@ -130,11 +133,11 @@ function logChangeEvent(e) {
 }
 
 /******************************
- * HELPERS
+ * STRUCTURE + HELPERS
  ******************************/
 
-function detectRowChange(oldStruct, newStruct, user, timestamp, changeType) {
-  var sheet = SpreadsheetApp.openById(MAIN_SHEET_ID).getActiveSheet();
+function detectRowChange(oldStruct, newStruct, user, timestamp, changeType, sourceId) {
+  var sheet = SpreadsheetApp.openById(sourceId).getActiveSheet();
   var name = sheet.getName();
   var oldRows = oldStruct[name] ? oldStruct[name].rows : 0;
   var newRows = newStruct[name] ? newStruct[name].rows : 0;
@@ -147,8 +150,8 @@ function detectRowChange(oldStruct, newStruct, user, timestamp, changeType) {
   return null;
 }
 
-function detectColumnChange(oldStruct, newStruct, user, timestamp, changeType) {
-  var sheet = SpreadsheetApp.openById(MAIN_SHEET_ID).getActiveSheet();
+function detectColumnChange(oldStruct, newStruct, user, timestamp, changeType, sourceId) {
+  var sheet = SpreadsheetApp.openById(sourceId).getActiveSheet();
   var name = sheet.getName();
   var oldCols = oldStruct[name] ? oldStruct[name].cols : 0;
   var newCols = newStruct[name] ? newStruct[name].cols : 0;
@@ -161,8 +164,8 @@ function detectColumnChange(oldStruct, newStruct, user, timestamp, changeType) {
   return null;
 }
 
-function captureCurrentStructure() {
-  var ss = SpreadsheetApp.openById(MAIN_SHEET_ID);
+function captureCurrentStructure(sourceId) {
+  var ss = SpreadsheetApp.openById(sourceId);
   var sheets = ss.getSheets();
   var structure = {};
   sheets.forEach(function (sh) {
@@ -174,23 +177,26 @@ function captureCurrentStructure() {
   return structure;
 }
 
-function saveSheetStructure() {
+function saveSheetStructure(sourceId) {
   var props = PropertiesService.getDocumentProperties();
-  props.setProperty("sheetStructure", JSON.stringify(captureCurrentStructure()));
+  props.setProperty("sheetStructure_" + sourceId, JSON.stringify(captureCurrentStructure(sourceId)));
 }
 
-function getOldStructure() {
+function getOldStructure(sourceId) {
   var props = PropertiesService.getDocumentProperties();
-  var data = props.getProperty("sheetStructure");
+  var data = props.getProperty("sheetStructure_" + sourceId);
   return data ? JSON.parse(data) : {};
 }
 
-function getLogSheet() {
+function getLogSheetForSource(sourceId) {
+  var mapping = MONITORED_SHEETS.find(s => s.id === sourceId);
+  if (!mapping) return null;
+
   var logSpreadsheet = SpreadsheetApp.openById(LOG_SHEET_ID);
-  var logSheet = logSpreadsheet.getSheetByName("Logs");
+  var logSheet = logSpreadsheet.getSheetByName(mapping.logName);
 
   if (!logSheet) {
-    logSheet = logSpreadsheet.insertSheet("Logs");
+    logSheet = logSpreadsheet.insertSheet(mapping.logName);
     logSheet.appendRow(["Timestamp", "User", "Action Type", "Details"]);
   }
   return logSheet;
@@ -204,19 +210,20 @@ function formatDate(date) {
  * ONE-TIME SETUP
  ******************************/
 
-// Run this manually once to create the triggers
 function createTriggers() {
-  var ss = SpreadsheetApp.openById(MAIN_SHEET_ID);
+  MONITORED_SHEETS.forEach(function (entry) {
+    var ss = SpreadsheetApp.openById(entry.id);
 
-  // Watch edits
-  ScriptApp.newTrigger("onMainEdit")
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
+    // Watch edits
+    ScriptApp.newTrigger("onAnyEdit")
+      .forSpreadsheet(ss)
+      .onEdit()
+      .create();
 
-  // Watch structural changes
-  ScriptApp.newTrigger("onMainChange")
-    .forSpreadsheet(ss)
-    .onChange()
-    .create();
+    // Watch structural changes
+    ScriptApp.newTrigger("onAnyChange")
+      .forSpreadsheet(ss)
+      .onChange()
+      .create();
+  });
 }
